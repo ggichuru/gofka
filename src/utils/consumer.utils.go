@@ -12,7 +12,7 @@ import (
 )
 
 type Consumer struct {
-	store *storage.NotificationStore // Reference to notification store struct.
+	ready chan *storage.NotificationStore // Reference to notification store struct.
 }
 
 /*
@@ -20,8 +20,11 @@ type Consumer struct {
 		: required : - satisfy the Sarama ConsumerGroupHandler Interface.
 		: use : - { initialization & cleanups  }[message consumption] // ( just placeholders for now )
 */
-func (*Consumer) Setup(sarama.ConsumerGroupSession) error   { return nil }
-func (*Consumer) Cleanup(sarama.ConsumerGroupSession) error { return nil }
+func (consumer *Consumer) Setup(sarama.ConsumerGroupSession) error {
+	close(consumer.ready)
+	return nil
+}
+func (consumer *Consumer) Cleanup(sarama.ConsumerGroupSession) error { return nil }
 
 func (consumer *Consumer) ConsumeClaim(session sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
 	/* Listen to new messages on the topic
@@ -31,23 +34,28 @@ func (consumer *Consumer) ConsumeClaim(session sarama.ConsumerGroupSession, clai
 		- STEP 2: Unmarshal the message into a notification struct.
 		- STEP 3: Add notification to store
 	*/
-	for msg := range claim.Messages() {
-		userID := string(msg.Key)
-		var notification models.Notification
-		err := json.Unmarshal(msg.Value, &notification)
-		if err != nil {
-			log.Printf("failed to unmarshal notification: %v", err)
-			continue
+	for {
+		select {
+		case msg := <-claim.Messages():
+			userID := string(msg.Key)
+			var notification models.Notification
+			err := json.Unmarshal(msg.Value, &notification)
+			if err != nil {
+				log.Printf("failed to unmarshal notification: %v", err)
+				continue
+			}
+
+			log.Printf("Message claimed: value = %s, timestamp = %v, topic = %s, userID = %s", string(msg.Value), msg.Timestamp, msg.Topic, userID)
+			session.MarkMessage(msg, "")
+		case <-session.Context().Done():
+			return nil
 		}
 
-		consumer.store.Add(userID, notification)
-		session.MarkMessage(msg, "")
 	}
 
-	return nil
 }
 
-func SetupConsumerGroup(ctx context.Context, store *storage.NotificationStore, consumer_group, broker_address, consumer_topic string) {
+func _setupConsumerGroup(ctx context.Context, store *storage.NotificationStore, consumer_group, broker_address, consumer_topic string) {
 	/*  setup the kafka-consumer_group
 
 	STEP 1: Initiliaze Consumer Group
@@ -63,7 +71,7 @@ func SetupConsumerGroup(ctx context.Context, store *storage.NotificationStore, c
 	defer consumerGroup.Close()
 
 	consumer := &Consumer{
-		store: store,
+		ready: make(chan *storage.NotificationStore),
 	}
 
 	for {

@@ -7,3 +7,5 @@ test-producer:
 test-consumer:
 	go run src/consumer/consumer.go
 
+run-sumulation:
+	./simulate.sh
